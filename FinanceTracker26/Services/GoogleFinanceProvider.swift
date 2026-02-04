@@ -20,6 +20,7 @@ struct GoogleFinanceProvider: PriceProvider {
         let url = URL(string: "https://www.google.com/finance/quote/\(symbol):\(exchange)")!
         let html = try await client.getString(url: url)
         guard let price = extractGoogleFinancePrice(html: html) else { throw PriceProviderError.parseFailed }
+        
         let currency: CurrencyCode = (exchange == "IST") ? .try : .usd
         return PriceQuote(symbol: symbol, price: price, currency: currency, updatedAt: Date())
     }
@@ -34,7 +35,20 @@ struct GoogleFinanceProvider: PriceProvider {
 
         let html = try await client.getString(url: url)
         guard let price = extractGoogleFinancePrice(html: html) else { throw PriceProviderError.parseFailed }
-        return PriceQuote(symbol: symbol, price: price, currency: .usd, updatedAt: Date())
+        
+        // Adjustments for specific precious metal futures
+        var adjustedPrice = price
+        switch symbol.uppercased() {
+        case "GCW00":
+            adjustedPrice -= 100
+        case "SIW00":
+            adjustedPrice -= 2
+        default:
+            break
+        }
+        if adjustedPrice < 0 { adjustedPrice = 0 }
+        
+        return PriceQuote(symbol: symbol, price: adjustedPrice, currency: .usd, updatedAt: Date())
     }
 
     private func extractGoogleFinancePrice(html: String) -> Decimal? {
