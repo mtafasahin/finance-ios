@@ -9,6 +9,9 @@ struct AssetTypePortfolioView: View {
     @Query private var settings: [AppSettingsEntity]
     @Query(filter: #Predicate<FXRateEntity> { $0.pair == "USDTRY" }) private var usdTryRates: [FXRateEntity]
 
+    @State private var sortKey: SortKey = .name
+    @State private var sortAscending: Bool = true
+
     var body: some View {
         let displayCurrency = settings.first?.displayCurrency ?? .try
         let usdTry = usdTryRates.first?.rate
@@ -16,10 +19,34 @@ struct AssetTypePortfolioView: View {
         let holdings = PortfolioCalculator.holdings(assets: assets, transactions: transactions)
             .filter { $0.type == assetType && $0.quantity > 0 }
 
+        let rows = holdings.map { h in
+            HoldingComputed(
+                holding: h,
+                displayCurrency: displayCurrency,
+                usdTry: usdTry
+            )
+        }
+
+        let sortedRows = rows.sorted { a, b in
+            let order: Bool
+            switch sortKey {
+            case .name:
+                order = a.holding.name.localizedCaseInsensitiveCompare(b.holding.name) == .orderedAscending
+            case .totalValue:
+                order = a.valueDisplay < b.valueDisplay
+            case .profitLoss:
+                order = a.profitLoss < b.profitLoss
+            case .profitLossPct:
+                order = a.profitLossPct < b.profitLossPct
+            }
+
+            return sortAscending ? order : !order
+        }
+
         List {
             Section {
-                ForEach(holdings) { h in
-                    HoldingRow(holding: h, displayCurrency: displayCurrency, usdTry: usdTry)
+                ForEach(sortedRows) { row in
+                    HoldingRow(holding: row.holding, displayCurrency: displayCurrency, usdTry: usdTry)
                 }
 
                 if holdings.isEmpty {
@@ -29,6 +56,72 @@ struct AssetTypePortfolioView: View {
             }
         }
         .navigationTitle(assetType.title)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Picker("Sort", selection: $sortKey) {
+                        ForEach(SortKey.allCases) { key in
+                            Text(key.title).tag(key)
+                        }
+                    }
+
+                    Divider()
+
+                    Button {
+                        sortAscending.toggle()
+                    } label: {
+                        Label(
+                            sortAscending ? "Ascending" : "Descending",
+                            systemImage: sortAscending ? "arrow.up" : "arrow.down"
+                        )
+                    }
+                } label: {
+                    Label("Sort", systemImage: "arrow.up.arrow.down")
+                }
+            }
+        }
+    }
+}
+
+private enum SortKey: String, CaseIterable, Identifiable {
+    case name
+    case totalValue
+    case profitLoss
+    case profitLossPct
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name: return "Asset Name"
+        case .totalValue: return "Total Value"
+        case .profitLoss: return "P/L"
+        case .profitLossPct: return "P/L %"
+        }
+    }
+}
+
+private struct HoldingComputed: Identifiable {
+    var id: UUID { holding.id }
+    let holding: HoldingSnapshot
+    let valueDisplay: Decimal
+    let profitLoss: Decimal
+    let profitLossPct: Decimal
+
+    init(holding: HoldingSnapshot, displayCurrency: CurrencyCode, usdTry: Decimal?) {
+        self.holding = holding
+
+        let lastPrice = holding.lastPrice ?? 0
+        let value = lastPrice * holding.quantity
+        let valueCurrency = holding.lastPriceCurrency ?? holding.currency
+        let valueDisplay = CurrencyConverter.convert(value, from: valueCurrency, to: displayCurrency, usdTry: usdTry)
+
+        let cost = holding.quantity * holding.averagePrice
+        let costDisplay = CurrencyConverter.convert(cost, from: holding.currency, to: displayCurrency, usdTry: usdTry)
+
+        self.valueDisplay = valueDisplay
+        self.profitLoss = valueDisplay - costDisplay
+        self.profitLossPct = costDisplay == 0 ? 0 : (self.profitLoss / costDisplay)
     }
 }
 
